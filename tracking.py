@@ -1,33 +1,38 @@
 from netCDF4 import Dataset
-import numpy as np
-import PIL
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+from sklearn.cluster import KMeans
+import sklearn.metrics as skmet
+import numpy as np
+import PIL
 import cv2
 import math
 from random import randint
 import sys, termios, tty, os, time, argparse
 import threading
 import pyautogui
+from matplotlib.patches import Rectangle
+import timeit
 
 axs = None
 projections = None
 depths = None
 profiles = None
 times = None
+radii = [[], []]
+distances = [[], []]
 clouds = []
 ids = []
-clickedLoc = []
-newClick = False
 
 class Cloud:
 
-    def __init__(self, id, area, x, y, contour, innerRadius, outerRadius, parentId, dA, selected, color, taken, visible, Lidar):
+    def __init__(self, id, area, x, y, contour, radius, innerRadius, outerRadius, parentId, dA, selected, color, taken, visible, Lidar):
         self.id = id
         self.x = x
         self.y = y
         self.area = area
         self.contour = contour
+        self.radius = radius
         self.innerRadius = innerRadius
         self.outerRadius = outerRadius
         self.parentId = parentId
@@ -45,19 +50,6 @@ def setVars(proj, dep, prof, tms, ax):
     profiles = prof
     times = tms
     axs = ax
-
-class myThread (threading.Thread):
-   def __init__(self, threadID, name, counter):
-      threading.Thread.__init__(self)
-      self.threadID = threadID
-      self.name = name
-      self.counter = counter
-   def run(self):
-      print("Starting " + self.name)
-      threadLock = threading.Lock()
-      threadLock.acquire()
-      runContoursWindow()
-      threadLock.release()
 
 def runContoursWindow():
 
@@ -77,6 +69,12 @@ def mouseClick(event,x,y,flags,param):
             if ((x/3 - cloud.x)**2 + (y/3 - cloud.y)**2) < cloud.outerRadius**2 and chosen != True:
                 cloud.selected = True
                 chosen = True
+                global radii
+                radii = [[],[]]
+                global distances
+                distances = [[],[]]
+                axs[1, 0].cla()
+                axs[0, 1].cla()
 
 def main():
 
@@ -90,8 +88,8 @@ def main():
 
     imagePath = args["images"]
     filePath = args["file"]
-    start = (int)(args["time"])
     loading = args["loading"]
+    start = args["time"]
 
     file = Dataset(filePath, "a", format="NETCDF4", chunks={'time'})
 
@@ -112,7 +110,7 @@ def main():
         fig.suptitle('Cloud Stereography', fontsize=20)
 
         setVars(projections, depths, profiles, file.variables['time'][:], axs)
-        start = getTime(start, times)
+        start = getClosestTime((int)(start), times)
 
 
         axs[0, 0].set_title('Area of Cloud')
@@ -128,7 +126,7 @@ def main():
         plt.xticks(file.variables['x'][:])
         plt.yticks(file.variables['y'][:])
 
-        display(start, imagePath)
+        display(start, imagePath, fig)
 
 def drawContours(contours, backtorgb, proj):
     for i in range(len(contours)):
@@ -137,7 +135,7 @@ def drawContours(contours, backtorgb, proj):
 
     return backtorgb
 
-def findContours(tm):
+def findContours(tm, isFirst):
     input = np.uint8(projections[tm] * 255)
     eroded = cv2.morphologyEx(input, cv2.MORPH_ERODE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(3,3)))
     dilated = cv2.morphologyEx(eroded, cv2.MORPH_DILATE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5)))
@@ -156,22 +154,15 @@ def findContours(tm):
 
     backtorgb = cv2.cvtColor(binarized, cv2.COLOR_GRAY2BGR)
 
-    if(tm > 0):
-        # image_8bitL = np.uint8(projections[tm-1] * 255)
-        # image_8bitL = np.pad(image_8bitL, ((1, 1), (1, 1)), 'constant')
-        # threshold_level = 127
-        # _L, binarizedL = cv2.threshold(image_8bitL, threshold_level, 255, cv2.THRESH_BINARY_INV)
-        # contoursL, hierarchyL = cv2.findContours(binarizedL, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-        trackContours(contours, contours, hierarchy, 0.2, -1.2, backtorgb)
-        drawn = drawContours(contours, backtorgb, projections[tm])
-    else:
-        trackContours(contours, contours, hierarchy, 0.2, -1.2, backtorgb)
-        drawn = drawContours(contours, backtorgb, projections[tm])
+    trackContours(tm, contours, contours, hierarchy, 0.2, -1.2, backtorgb, isFirst)
+    drawn = drawContours(contours, backtorgb, projections[tm])
 
     return drawn
 
-def trackContours(lastContours, contours, hierarchy, wX, wY, image):
+def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst):
+
+    start = timeit.default_timer()
 
     contours.sort(key=lambda c: cv2.contourArea(c), reverse=True)
     lastContours.sort(key=lambda c: cv2.contourArea(c), reverse=True)
@@ -196,10 +187,18 @@ def trackContours(lastContours, contours, hierarchy, wX, wY, image):
         box = cv2.boxPoints(rect)
         box = np.int0(box)
 
+
         if(area > 3):
             (rX,rY),radius = cv2.minEnclosingCircle(contours[i])
+
+            if M["m00"] != 0:
+                rX = int(M["m10"] / M["m00"])
+                rY = int(M["m01"] / M["m00"])
+            else:
+                rX, rY = 0, 0
+
             if(reset):
-                clouds.append(Cloud(len(ids), area, rX, rY, contours[i], 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
+                clouds.append(Cloud(len(ids), area, rX, rY, contours[i], radius, 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
                 ids.append(len(ids))
             else:
                 inNext = False
@@ -213,37 +212,39 @@ def trackContours(lastContours, contours, hierarchy, wX, wY, image):
                             inNext = True
 
                 while(len(viable) != 0):
-                    clo = min(viable, key=lambda clo: 2*(radius**2)*math.fabs((rX-clo.x-wX)**2 + (rY-clo.y-wY)**2))
+                    clo = min(viable, key=lambda clo: radius*((rX-clo.x-wX)**2 + (rY-clo.y-wY)**2) + math.fabs(clo.area - area))
 
                     viable.remove(clo)
 
                     if (area < 40):
-                        if (math.fabs((rX-clo.x-wX)**2 > (clo.outerRadius**2)/2 or (rY-clo.y-wY)**2) > (clo.outerRadius**2)/2 or math.fabs(area - (clo.area)) > clo.area):
+                        if (math.fabs((rX-clo.x-wX)**2 > (clo.radius**2)/2 or (rY-clo.y-wY)**2) > (clo.radius**2)/2):
                             if (len(viable) > 0):
                                 continue
-                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
+                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], radius, 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
                             ids.append(len(ids))
                             break
 
-                    elif (area < 120):
-                        if (math.fabs((rX-clo.x-wX)**2 + (rY-clo.y-wY)**2) > clo.outerRadius**2 or math.fabs(area - (clo.area)) > clo.area):
+                    elif (area < 200):
+                        if (math.fabs((rX-clo.x-wX)**2 + (rY-clo.y-wY)**2) > (clo.radius)**2):
                             if (len(viable) > 0):
                                 continue
-                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
+                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], radius, 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
                             ids.append(len(ids))
                             break
 
                     else:
-                        if ((rX-clo.x-wX)**2 > (clo.outerRadius**2)/2 or ((rY-clo.y-wY)**2) > (clo.outerRadius**2)/2 or math.fabs(area - (clo.area)) > 2*clo.area):
+                        if ((rX-clo.x-wX)**2 > (clo.outerRadius**2)/2 or ((rY-clo.y-wY)**2) > (clo.outerRadius**2)/2 or math.fabs(area - (clo.area)) > 2*max(area, clo.area)):
                             if (len(viable) > 0):
                                 continue
-                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
+                            clouds.append(Cloud(len(ids), area, rX, rY, contours[i], radius, 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, True, False))
                             ids.append(len(ids))
                             break
 
                     clo.area = area
+                    clo.contour = contours[i]
                     clo.x = rX
                     clo.y = rY
+                    clo.radius = radius
                     clo.outerRadius = 2*radius
                     clo.innerRadius = 3*radius/4
                     clo.dA = max(area - clo.area, math.sqrt(clo.area))
@@ -252,7 +253,7 @@ def trackContours(lastContours, contours, hierarchy, wX, wY, image):
                     break
                 if(inNext != True):
                     visible = True
-                    clouds.append(Cloud(len(ids), area, rX, rY, contours[i], 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, visible, False))
+                    clouds.append(Cloud(len(ids), area, rX, rY, contours[i], radius, 3*radius/4, 2*radius, -1, area, False, [randint(0, 200), randint(0, 200), randint(0, 200)], True, visible, False))
                     ids.append(len(ids))
 
     for c in reversed(clouds):
@@ -262,6 +263,7 @@ def trackContours(lastContours, contours, hierarchy, wX, wY, image):
 
     clouds.sort(key=lambda c: c.area, reverse=False)
 
+
     for i in range(len(clouds)-1):
 
         for j in range(i+1, len(clouds)):
@@ -270,35 +272,66 @@ def trackContours(lastContours, contours, hierarchy, wX, wY, image):
                 clouds[j].area += clouds[i].area
                 clouds[i].parentId = clouds[j].id
 
+    radius = -1
+    minDistance = -1
+
     for c in range(len(clouds)):
+        dist = cv2.pointPolygonTest(clouds[c].contour,(image.shape[0]/2, image.shape[1]/2),True)
+        if ((isFirst and dist > 0) or clouds[c].selected) :
+            M = cv2.moments(clouds[c].contour)
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            radius = clouds[c].radius
+            mX, mY = image.shape[0]/2, image.shape[1]/2
+            minPoint = min(clouds[c].contour, key = lambda p : (mX-p[0][0])**2 + (mY-p[0][1])**2)
+            minDistance = math.sqrt(((mX - minPoint[0][0])**2 + (mY - minPoint[0][1])**2))
+            clouds[c].selected = True
+            image = cv2.line(image, ((int)(mX), (int)(mY)), ((int)(minPoint[0][0]), (int)(minPoint[0][1])), tuple(clouds[c].color), 1)
+            image = cv2.circle(image, ((int)(mX), (int)(mY)), 1, tuple(clouds[c].color), 2)
+            global radii
+            radii[0].append(parseTime(times[tm], ':'))
+            radii[1].append(radius * 50)
+            global distances
+            distances[0].append(parseTime(times[tm], ':'))
+            distances[1].append(minDistance/radius)
+
+
         clouds[c].taken = False
 
         if(clouds[c].visible):
-            image = cv2.circle(image, (((int)(clouds[c].x + wX), (int)(clouds[c].y + wY))), (int)(clouds[c].outerRadius), tuple(clouds[c].color), 1)
+            image = cv2.circle(image, (((int)(clouds[c].x + wX), (int)(clouds[c].y + wY))), (int)(clouds[c].radius), tuple(clouds[c].color), 1)
+
+    stop = timeit.default_timer()
 
     return image
 
 
-def plot(tm, imagePath):
+def plot(tm, imagePath, isFirst):
 
     axs[0, 0].set_ylim(0, len(projections[tm]))
-    axs[1, 0].cla()
-    axs[1, 0].plot(profiles[tm])
-    axs[0, 0].imshow(projections[tm][::-1,:], cmap=plt.cm.Blues, vmin=0.0000001)
-    axs[0, 1].set_title("Time Instance: " + str(parseTime(times[tm])))
-    axs[1, 1].set_title("Depth of Cloud")
-    imageCont = findContours(tm)
-    # axs[1, 1].imshow(imageCont ,cmap=plt.cm.Greys)
-    axs[1, 1].imshow(depths[tm], cmap=plt.cm.Blues, vmin=0.0000001)
 
-    if os.path.exists(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg'):
-        img = mpimg.imread(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg')
-        axs[0, 1].imshow(img)
-    else:
-        axs[0, 1].cla()
+    axs[0, 0].imshow(projections[tm][::-1,:], cmap=plt.cm.Blues)
+    axs[0, 1].set_title("Time Instance: " + str(parseTime(times[tm], '')))
+    axs[1, 1].set_title("Depth of Cloud")
+    imageCont = findContours(tm, isFirst)
+
+    axs[1, 0].cla()
+    # axs[1, 0].plot(profiles[tm])
+    axs[1, 0].scatter(radii[0], radii[1])
+
+    axs[0, 1].cla()
+    axs[0, 1].scatter(distances[0], distances[1])
+
+    # axs[1, 1].imshow(imageCont ,cmap=plt.cm.Greys)
+    axs[1, 1].imshow(depths[tm], cmap=plt.cm.Blues)
+
+    # if os.path.exists(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg'):
+    #     img = mpimg.imread(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg')
+    #     axs[0, 1].imshow(img)
+    # else:
+    #     axs[0, 1].cla()
 
     cv2.imshow("Contours", cv2.resize(imageCont, (3*imageCont.shape[0], 3*imageCont.shape[1]), interpolation = cv2.INTER_AREA))
-
 
 def keyboard():
     fd = sys.stdin.fileno()
@@ -311,63 +344,69 @@ def keyboard():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
-def display(start, imagePath):
+def display(start, imagePath, fig):
 
     tm = start
     button_delay = 0.0001
-
-    plot(tm, imagePath)
+    plot(tm, imagePath, True)
     char = ''
-
     plt.pause(0.0001)
 
     while True:
+        fig.suptitle('Cloud Stereography\n' + str(parseTime(times[tm], ":")), fontsize=20)
+
+        if (times[tm] > times[-1]):
+            print("Index out of bounds")
+            exit(0)
 
         lastChar = char
         char = keyboard()
 
-        if (char == "p"):
+        if (char == "q"):
             exit(0)
 
         if (char == "m"):
             runContoursWindow()
 
-            # plot(tm, imagePath)
-            # plt.pause(0.0001)
-
         elif (char == "a" and tm > 0):
-            plot(tm-1, imagePath)
+            plot(tm-1, imagePath, False)
             plt.pause(0.0001)
             if (lastChar == 'm'):
-                plot(tm-1, imagePath)
+                plot(tm-1, imagePath, False)
                 plt.pause(0.0001)
             tm = tm-1
 
         elif (char == "d" and tm < len(projections)-1):
-            plot(tm+1, imagePath)
+            plot(tm+1, imagePath, False)
             plt.pause(0.0001)
             if (lastChar == 'm'):
-                plot(tm+1, imagePath)
+                plot(tm+1, imagePath, False)
                 plt.pause(0.0001)
             tm = tm+1
 
         elif (char == "f" and tm < len(projections)-10):
-            plot(tm+10, imagePath)
+            plot(tm+10, imagePath, False)
             plt.pause(0.0001)
             tm = tm+10
 
 def getTime(iter, times):
     val = reverseParseTime(iter)
-    if val in times:
+    if iter in times:
         return np.where(times==val)[0][0]
     else:
         return 0
 
-def parseTime(ts):
+def getClosestTime(iter, times):
+    for time in times:
+        if (math.fabs(iter - time) <= 10):
+            return np.where(times==time)[0][0]
+    return 0
+
+def parseTime(ts, separator):
     hours = str(ts//3600)
     minutes = str((ts%3600)//60)
     seconds = str((ts%3600)%60)
-    stamp = hours + minutes.zfill(2) + seconds.zfill(2)
+    stamp = hours + separator + minutes.zfill(2) + separator +seconds.zfill(2)
     return stamp
 
 def reverseParseTime(ts):
