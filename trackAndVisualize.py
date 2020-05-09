@@ -20,7 +20,7 @@ depths = None
 profiles = None
 times = None
 radii = {}
-distances = {}
+distanceRatios = {}
 clouds = []
 ids = []
 
@@ -71,8 +71,8 @@ def mouseClick(event,x,y,flags,param):
                 chosen = True
                 global radii
                 radii = {}
-                global distances
-                distances = {}
+                global distanceRatios
+                distanceRatios = {}
                 axs[1, 0].cla()
                 axs[0, 1].cla()
 
@@ -221,7 +221,7 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
 
                 for clo in clouds:
                     if(math.fabs(rX-(clo.x + wX)) <= clo.outerRadius and math.fabs(rY-(clo.y + wY)) <= clo.outerRadius
-                        and math.fabs(rX-(clo.x + wX)) <= 2*radius and math.fabs(rY-(clo.y + wY)) <= 2*radius): #TODO: fix size comparison
+                        and math.fabs(rX-(clo.x + wX)) <= 2*radius and math.fabs(rY-(clo.y + wY)) <= 2*radius):
                         if(not clo.taken):
                             viable.append(clo)
                             inNext = True
@@ -278,7 +278,6 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
 
     clouds.sort(key=lambda c: c.area, reverse=False)
 
-
     for i in range(len(clouds)-1):
 
         for j in range(i+1, len(clouds)):
@@ -305,8 +304,8 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
             image = cv2.circle(image, ((int)(mX), (int)(mY)), 1, tuple(clouds[c].color), 2)
             global radii
             radii[parseTime(times[tm], ':')] = radius * 50
-            global distances
-            distances[parseTime(times[tm], ':')] = minDistance/radius
+            global distanceRatios
+            distanceRatios[parseTime(times[tm], ':')] = minDistance/radius
 
         clouds[c].taken = False
 
@@ -336,7 +335,7 @@ def plot(tm, imagePath, isFirst, fig):
     axs[1, 0].xaxis.set_major_locator(plt.MaxNLocator(3))
 
     axs[0, 1].cla()
-    axs[0, 1].scatter(dict(sorted(distances.items())).keys(), dict(sorted(distances.items())).values())
+    axs[0, 1].scatter(dict(sorted(distanceRatios.items())).keys(), dict(sorted(distanceRatios.items())).values())
     axs[0, 1].xaxis.set_major_locator(plt.MaxNLocator(3))
 
     axs[0, 0].set_xlabel('X-Coordinate')
@@ -455,10 +454,6 @@ def calculate(file):
         x_len = len(x_dim)
         y_len = len(y_dim)
         z_len = len(z_dim)
-
-        proj = np.zeros([x_len, y_len])
-        depth = np.zeros([x_len, y_len])
-        profile = np.zeros([z_len])
 
         instance = cloud[t]
         instance[instance < 0] = 0

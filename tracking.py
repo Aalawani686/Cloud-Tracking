@@ -20,7 +20,7 @@ depths = None
 profiles = None
 times = None
 radii = {}
-distances = {}
+distanceRatios = {}
 clouds = []
 ids = []
 
@@ -42,39 +42,6 @@ class Cloud:
         self.taken = taken
         self.visible = visible
         self.Lidar = Lidar
-
-def setVars(proj, dep, prof, tms, ax):
-    global projections, depths, profiles, times, axs
-    projections = proj
-    depths = dep
-    profiles = prof
-    times = tms
-    axs = ax
-
-def runContoursWindow():
-
-    cv2.setMouseCallback("Contours", mouseClick)
-
-
-def mouseClick(event,x,y,flags,param):
-    global clouds
-    if (len(clouds) <= 0):
-        return
-    clouds.sort(key=lambda c: c.area, reverse=False)
-
-    if event == cv2.EVENT_LBUTTONDOWN:
-        chosen = False
-        for cloud in clouds:
-            cloud.selected = False
-            if ((x/3 - cloud.x)**2 + (y/3 - cloud.y)**2) < cloud.outerRadius**2 and chosen != True:
-                cloud.selected = True
-                chosen = True
-                global radii
-                radii = {}
-                global distances
-                distances = {}
-                axs[1, 0].cla()
-                axs[0, 1].cla()
 
 def main():
 
@@ -138,6 +105,39 @@ def main():
 
         display(start, imagePath, fig)
 
+def setVars(proj, dep, prof, tms, ax):
+    global projections, depths, profiles, times, axs
+    projections = proj
+    depths = dep
+    profiles = prof
+    times = tms
+    axs = ax
+
+def runContoursWindow():
+
+    cv2.setMouseCallback("Contours", mouseClick)
+
+
+def mouseClick(event,x,y,flags,param):
+    global clouds
+    if (len(clouds) <= 0):
+        return
+    clouds.sort(key=lambda c: c.area, reverse=False)
+
+    if event == cv2.EVENT_LBUTTONDOWN:
+        chosen = False
+        for cloud in clouds:
+            cloud.selected = False
+            if ((x/3 - cloud.x)**2 + (y/3 - cloud.y)**2) < cloud.outerRadius**2 and chosen != True:
+                cloud.selected = True
+                chosen = True
+                global radii
+                radii = {}
+                global distanceRatios
+                distanceRatios = {}
+                axs[1, 0].cla()
+                axs[0, 1].cla()
+
 def drawContours(contours, backtorgb, proj):
     for i in range(len(contours)):
         if cv2.contourArea(contours[i]) < (len(proj)-1)*(len(proj[0])-1):
@@ -165,12 +165,12 @@ def findContours(tm, isFirst):
     backtorgb = cv2.cvtColor(binarized, cv2.COLOR_GRAY2BGR)
 
 
-    trackContours(tm, contours, contours, hierarchy, 0.2, -1.2, backtorgb, isFirst)
+    trackContours(tm, contours, contours, 0.2, -1.2, backtorgb, isFirst)
     drawn = drawContours(contours, backtorgb, projections[tm])
 
     return drawn
 
-def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst):
+def trackContours(tm, lastContours, contours, wX, wY, image, isFirst):
 
     start = timeit.default_timer()
 
@@ -197,7 +197,6 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
         box = cv2.boxPoints(rect)
         box = np.int0(box)
 
-
         if(area > 3):
             (rX,rY),radius = cv2.minEnclosingCircle(contours[i])
 
@@ -216,7 +215,7 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
 
                 for clo in clouds:
                     if(math.fabs(rX-(clo.x + wX)) <= clo.outerRadius and math.fabs(rY-(clo.y + wY)) <= clo.outerRadius
-                        and math.fabs(rX-(clo.x + wX)) <= 2*radius and math.fabs(rY-(clo.y + wY)) <= 2*radius): #TODO: fix size comparison
+                        and math.fabs(rX-(clo.x + wX)) <= 2*radius and math.fabs(rY-(clo.y + wY)) <= 2*radius):
                         if(not clo.taken):
                             viable.append(clo)
                             inNext = True
@@ -273,7 +272,6 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
 
     clouds.sort(key=lambda c: c.area, reverse=False)
 
-
     for i in range(len(clouds)-1):
 
         for j in range(i+1, len(clouds)):
@@ -286,8 +284,7 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
     minDistance = -1
 
     for c in range(len(clouds)):
-        dist = cv2.pointPolygonTest(clouds[c].contour,(image.shape[0]/2, image.shape[1]/2),True)
-        if ((isFirst and dist > 0) or clouds[c].selected) :
+        if (clouds[c].selected) :
             M = cv2.moments(clouds[c].contour)
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
@@ -300,8 +297,8 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
             image = cv2.circle(image, ((int)(mX), (int)(mY)), 1, tuple(clouds[c].color), 2)
             global radii
             radii[parseTime(times[tm], ':')] = radius * 50
-            global distances
-            distances[parseTime(times[tm], ':')] = minDistance/radius
+            global distanceRatios
+            distanceRatios[parseTime(times[tm], ':')] = minDistance/radius
 
 
         clouds[c].taken = False
@@ -332,7 +329,7 @@ def plot(tm, imagePath, isFirst, fig):
     axs[1, 0].xaxis.set_major_locator(plt.MaxNLocator(3))
 
     axs[0, 1].cla()
-    axs[0, 1].scatter(dict(sorted(distances.items())).keys(), dict(sorted(distances.items())).values())
+    axs[0, 1].scatter(dict(sorted(distanceRatios.items())).keys(), dict(sorted(distanceRatios.items())).values())
     axs[0, 1].xaxis.set_major_locator(plt.MaxNLocator(3))
 
     axs[0, 0].set_xlabel('X-Coordinate')
@@ -365,7 +362,7 @@ def keyboard():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
-def display(start, imagePath, draw, fig):
+def display(start, imagePath, fig):
 
     tm = start
     button_delay = 0.0001
@@ -379,7 +376,6 @@ def display(start, imagePath, draw, fig):
             print("Index out of bounds")
             exit(0)
 
-        draw(secondsToHours(times[tm]))
         lastChar = char
         char = keyboard()
 
@@ -451,10 +447,6 @@ def calculate(file):
         x_len = len(x_dim)
         y_len = len(y_dim)
         z_len = len(z_dim)
-
-        proj = np.zeros([x_len, y_len])
-        depth = np.zeros([x_len, y_len])
-        profile = np.zeros([z_len])
 
         instance = cloud[t]
         instance[instance < 0] = 0
