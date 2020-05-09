@@ -19,8 +19,8 @@ projections = None
 depths = None
 profiles = None
 times = None
-radii = [[], []]
-distances = [[], []]
+radii = {}
+distances = {}
 clouds = []
 ids = []
 
@@ -70,9 +70,9 @@ def mouseClick(event,x,y,flags,param):
                 cloud.selected = True
                 chosen = True
                 global radii
-                radii = [[],[]]
+                radii = {}
                 global distances
-                distances = [[],[]]
+                distances = {}
                 axs[1, 0].cla()
                 axs[0, 1].cla()
 
@@ -80,17 +80,21 @@ def main():
 
     ap = argparse.ArgumentParser()
 
-    ap.add_argument("-f", "--file", required=True, help="path to input netCDF4 file")
+    ap.add_argument("-d", "--date", required=True, help="date")
     ap.add_argument("-i", "--images", required=True, help="path to input images")
-    ap.add_argument("-t", "--time", required=True, help="start time")
+    ap.add_argument("-ts", "--sonde", required=True, help="start time for sonde")
+    ap.add_argument("-tl", "--lidar", required=True, help="start time for lidar")
+
     ap.add_argument("-l", "--loading", required=True, help="Loading data files = 'load', Displaying data = 'display', Both = 'both'")
     args = vars(ap.parse_args())
 
     imagePath = args["images"]
-    filePath = args["file"]
+    date = args["date"]
     loading = args["loading"]
+    time_ld = args["lidar"]
+    time_sonde = args["sonde"]
 
-    file = Dataset(filePath, "a", format="NETCDF4", chunks={'time'})
+    file = Dataset("SGP_COGS" + str(date) + ".nc", "a", format="NETCDF4", chunks={'time'})
 
     if loading == 'load' or loading == 'both':
         projections, depths, profiles = calculate(file)
@@ -104,14 +108,12 @@ def main():
         plt.ion()
         plt.show()
 
-        date = 20180504
-        time_ld = 200117
-        #time_ld = 210116
-        time_sonde = 233600
         start, end, draw = plotCloud(date, time_ld, time_sonde)
         #temp = fullCloudDataset(date, time_ld, time_sonde)
 
         fig, axs = plt.subplots(2, 2, figsize=(8, 9))
+        fig.subplots_adjust(hspace=.2)
+        fig.subplots_adjust(wspace=.3)
 
         fig.suptitle('Cloud Stereography', fontsize=20)
 
@@ -120,14 +122,21 @@ def main():
 
 
         axs[0, 0].set_title('Area of Cloud')
-        axs[0, 1].set_title('Depth of Cloud')
-        axs[1, 0].set_title('Height Profile of Cloud')
+        axs[1, 1].set_title('Depth of Cloud')
+        axs[1, 0].set_title("Radius of Tracked Cloud")
+        axs[0, 1].set_title("Distance to Lidar / Radius")
 
         axs[0, 0].set_xlabel('X-Coordinate')
         axs[0, 0].set_ylabel('Y-Coordinate')
 
-        axs[1, 0].set_xlabel('Z-Coordinate')
-        axs[1, 0].set_ylabel('Density of Cloud')
+        axs[1, 0].set_xlabel('Length (m)')
+        axs[1, 0].set_ylabel('TimeStamp')
+
+        axs[0, 1].set_xlabel('Ratio')
+        axs[0, 1].set_ylabel('TimeStamp')
+
+        axs[1, 1].set_xlabel('X-Coordinate')
+        axs[1, 1].set_ylabel('Y-Coordinate')
 
         plt.xticks(file.variables['x'][:])
         plt.yticks(file.variables['y'][:])
@@ -288,17 +297,16 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
             radius = clouds[c].radius
-            minPoint = min(clouds[c].contour, key = lambda p : (cX-p[0][0])**2 + (cY-p[0][1])**2)
-            minDistance = math.sqrt(((clouds[c].x - minPoint[0][0])**2 + (clouds[c].y - minPoint[0][1])**2))
+            mX, mY = image.shape[0]/2, image.shape[1]/2
+            minPoint = min(clouds[c].contour, key = lambda p : (mX-p[0][0])**2 + (mY-p[0][1])**2)
+            minDistance = math.sqrt(((mX - minPoint[0][0])**2 + (mY - minPoint[0][1])**2))
             clouds[c].selected = True
-            image = cv2.line(image, ((int)(cX), (int)(cY)), ((int)(minPoint[0][0]), (int)(minPoint[0][1])), tuple(clouds[c].color), 1)
-            image = cv2.circle(image, (cX, cY), 1, tuple(clouds[c].color), 2)
+            image = cv2.line(image, ((int)(mX), (int)(mY)), ((int)(minPoint[0][0]), (int)(minPoint[0][1])), tuple(clouds[c].color), 1)
+            image = cv2.circle(image, ((int)(mX), (int)(mY)), 1, tuple(clouds[c].color), 2)
             global radii
-            radii[0].append(parseTime(times[tm], ':'))
-            radii[1].append(radius * 50)
+            radii[parseTime(times[tm], ':')] = radius * 50
             global distances
-            distances[0].append(parseTime(times[tm], ':'))
-            distances[1].append(minDistance * 50)
+            distances[parseTime(times[tm], ':')] = minDistance/radius
 
         clouds[c].taken = False
 
@@ -310,30 +318,43 @@ def trackContours(tm, lastContours, contours, hierarchy, wX, wY, image, isFirst)
     return image
 
 
-def plot(tm, imagePath, isFirst):
+def plot(tm, imagePath, isFirst, fig):
+    fig.suptitle('Cloud Stereography\n' + str(parseTime(times[tm], ":")), fontsize=20)
+
+    axs[0, 0].set_title('Area of Cloud')
+    axs[1, 1].set_title('Depth of Cloud')
+    axs[1, 0].set_title("Radius of Tracked Cloud")
+    axs[0, 1].set_title("Distance to Lidar / Radius")
 
     axs[0, 0].set_ylim(0, len(projections[tm]))
 
     axs[0, 0].imshow(projections[tm][::-1,:], cmap=plt.cm.Blues)
-    axs[0, 1].set_title("Time Instance: " + str(parseTime(times[tm], '')))
-    axs[1, 1].set_title("Depth of Cloud")
     imageCont = findContours(tm, isFirst)
 
     axs[1, 0].cla()
-    # axs[1, 0].plot(profiles[tm])
-    axs[1, 0].scatter(radii[0], radii[1])
+    axs[1, 0].scatter(dict(sorted(radii.items())).keys(), dict(sorted(radii.items())).values())
+    axs[1, 0].xaxis.set_major_locator(plt.MaxNLocator(3))
 
     axs[0, 1].cla()
-    axs[0, 1].scatter(distances[0], distances[1])
+    axs[0, 1].scatter(dict(sorted(distances.items())).keys(), dict(sorted(distances.items())).values())
+    axs[0, 1].xaxis.set_major_locator(plt.MaxNLocator(3))
 
-    # axs[1, 1].imshow(imageCont ,cmap=plt.cm.Greys)
+    axs[0, 0].set_xlabel('X-Coordinate')
+    axs[0, 0].set_ylabel('Y-Coordinate')
+
+    axs[1, 1].set_xlabel('X-Coordinate')
+    axs[1, 1].set_ylabel('Y-Coordinate')
+
+    axs[0, 1].set_xlabel('Ratio')
+    axs[0, 1].set_ylabel('TimeStamp')
+
+    axs[1, 0].set_xlabel('Length (m)')
+    axs[1, 0].set_ylabel('TimeStamp')
+
+    axs[1, 0].set_title("Radius of Tracked Cloud")
+    axs[0, 1].set_title("Distance to Lidar / Radius")
+
     axs[1, 1].imshow(depths[tm], cmap=plt.cm.Blues)
-
-    # if os.path.exists(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg'):
-    #     img = mpimg.imread(imagePath + 'sgpstereocamaE45.a1.20190715.' + str(parseTime(times[tm])) + '.jpg')
-    #     axs[0, 1].imshow(img)
-    # else:
-    #     axs[0, 1].cla()
 
     cv2.imshow("Contours", cv2.resize(imageCont, (3*imageCont.shape[0], 3*imageCont.shape[1]), interpolation = cv2.INTER_AREA))
 
@@ -352,12 +373,11 @@ def display(start, imagePath, draw, fig):
 
     tm = start
     button_delay = 0.0001
-    plot(tm, imagePath, True)
+    plot(tm, imagePath, True, fig)
     char = ''
     plt.pause(0.0001)
 
     while True:
-        fig.suptitle('Cloud Stereography\n' + str(parseTime(times[tm], ":")), fontsize=20)
 
         if (times[tm] > times[-1]):
             print("Index out of bounds")
@@ -374,23 +394,23 @@ def display(start, imagePath, draw, fig):
             runContoursWindow()
 
         elif (char == "a" and tm > 0):
-            plot(tm-1, imagePath, False)
+            plot(tm-1, imagePath, False, fig)
             plt.pause(0.0001)
             if (lastChar == 'm'):
-                plot(tm-1, imagePath, False)
+                plot(tm-1, imagePath, False, fig)
                 plt.pause(0.0001)
             tm = tm-1
 
         elif (char == "d" and tm < len(projections)-1):
-            plot(tm+1, imagePath, False)
+            plot(tm+1, imagePath, False, fig)
             plt.pause(0.0001)
             if (lastChar == 'm'):
-                plot(tm+1, imagePath, False)
+                plot(tm+1, imagePath, False, fig)
                 plt.pause(0.0001)
             tm = tm+1
 
         elif (char == "f" and tm < len(projections)-10):
-            plot(tm+10, imagePath, False)
+            plot(tm+10, imagePath, False, fig)
             plt.pause(0.0001)
             tm = tm+10
 
@@ -411,7 +431,7 @@ def parseTime(ts, separator):
     hours = str(ts//3600)
     minutes = str((ts%3600)//60)
     seconds = str((ts%3600)%60)
-    stamp = hours + separator + minutes.zfill(2) + separator +seconds.zfill(2)
+    stamp = hours + separator + minutes.zfill(2) + separator + seconds.zfill(2)
     return stamp
 
 def reverseParseTime(ts):
@@ -573,10 +593,7 @@ def clusterClouds(date, time_ld, time_sonde):
     :param time_sonde: Provide time in the following format as a string: HourMinuteSecond Ex: 113000 -> 11:30
     :return: an array of tuples with the structure (time (s), altitude (m), radial_velocity (m/s)
     """
-    # threshold separation = 100m
-    # threshold valid cloud > 300m -> 5000m
-    # v = sqrt(u^2 + v^2)
-    # take radiosonde closest to the above time
+
     data_ld = readDLData(date, time_ld)
     data_sonde = readSondeData(date, time_sonde)
 
@@ -601,7 +618,6 @@ def clusterClouds(date, time_ld, time_sonde):
     for i in range(len(u_wind)):
         velocity.append(math.sqrt(u_wind[i] ** 2 + v_wind[i] ** 2))
 
-    # print(velocity)
     # 100m separation using speed
     t_s = [200 / v for v in velocity]
 
@@ -655,20 +671,21 @@ def plotCloud(date, time_ld, time_sonde):
     clusters_plot = [id for c in enumerate(clouds) for id in [c[0]] * len(c[1])]
     plt.ylabel('Height (m)')
     plt.xlabel('Time (h)')
-    x_plot = [c[0] for cloud in clouds for c in cloud]
+    x_plot = [secondsToHours(c[0]) for cloud in clouds for c in cloud]
     y_plot = [c[1] for cloud in clouds for c in cloud]
 
     plt.scatter(x_plot, y_plot, c=clusters_plot, cmap='rainbow')
     point = plt.ginput(1)[0]
     x_input = point[0]
 
+
     cluster_input = clusters_plot[find_closest_value_index(x_plot, x_input)]
-    t1 = x_plot[find_approx_value_index(clusters_plot, cluster_input, 0)]  # function finds the first index with the value
-    t2 = x_plot[find_approx_value_index(clusters_plot, cluster_input + 1, 0) - 1]
+    t1 = hoursToSeconds(x_plot[find_approx_value_index(clusters_plot, cluster_input, 0)])  # function finds the first index with the value
+    t2 = hoursToSeconds(x_plot[find_approx_value_index(clusters_plot, cluster_input + 1, 0) - 1])
 
     plt.close()
     draw = plotCloudAndVelocity(cluster_input, clouds)
-    draw(secondsToHours(t1))
+    draw(t1)
     return (int)(t1), (int)(t2), draw
 
 
@@ -680,7 +697,7 @@ def plotCloudAndVelocity(cloud_id, clouds):
     height_plot = [c[1] for c in cloud]
     rv_plot = [c[2] for c in cloud]
 
-    x_plot = [c[0] for cloud in clouds for c in cloud]
+    x_plot = [secondsToHours(c[0]) for cloud in clouds for c in cloud]
     y_plot = [c[1] for cloud in clouds for c in cloud]
     clusters_plot = [id for c in enumerate(clouds) for id in [c[0]] * len(c[1])]
     fig, main = plt.subplots(1)
@@ -700,7 +717,7 @@ def plotCloudAndVelocity(cloud_id, clouds):
     plt.xlabel('Time (h)')
     plt.scatter(time_plot, height_plot)
     ax2 = plt.subplot(212)
-    plt.scatter(time_plot, rv_plot, c=height_heatmap, cmap='plasma')
+    plt.scatter(time_plot, rv_plot, c=height_heatmap, cmap='bwr')
     plt.ylabel('Radial Velocity (m/s)')
     plt.xlabel('Time (h)')
 
@@ -718,7 +735,7 @@ def plotCloudAndVelocity(cloud_id, clouds):
         xrange_main = main.get_xlim()[1] - main.get_xlim()[0]
         yrange_main = main.get_ylim()[1] - main.get_ylim()[0]
 
-        main.add_patch(Rectangle((hoursToSeconds(time) - xrange_main/80, main.get_ylim()[0]), xrange_main/40, yrange_main, facecolor="black", alpha = 0.5))
+        main.add_patch(Rectangle((time - xrange_main/80, main.get_ylim()[0]), xrange_main/40, yrange_main, facecolor="black", alpha = 0.5))
 
     return draw
 
@@ -727,18 +744,12 @@ def map_clusters(cloud_height, altitude, time, t_s, t_ll, t_lh):
     color_map = [1]
     curr_cluster = 1
     t_start = 0
-    # print(time[0], time[-1])
-    # print(cloud_height)
+
     for i in range(1, len(time)):
-        # print("({}, {})".format(time[i], cloud[i]))
         thresh_index = find_approx_value_index(altitude, cloud_height[i], 5)
         if time[i] - time[i - 1] < t_s[thresh_index] and time[i] - time[t_start] < t_lh[thresh_index]:
             color_map.append(curr_cluster)
         else:
-            # print("time before: {} time after: {}".format(time[i-1], time[i]))
-            # print(i)
-            # print("time seperation: {} threshold: {}".format(time[i] - time[i - 1], t_s[i]))
-            # print("cloud length: {} min length: {} max length: {}".format(time[i - 1] - time[t_start], t_ll[i], t_lh[i]))
             if time[i - 1] - time[t_start] < t_ll[thresh_index]:
                 curr_cluster -= 1
                 for j in range(t_start, i):
